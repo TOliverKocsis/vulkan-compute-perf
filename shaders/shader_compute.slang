@@ -43,13 +43,13 @@ struct Particle {
 struct UniformBuffer {
     float deltaTime;
 };
-ConstantBuffer<UniformBuffer> ubo;
+[[vk::binding(0)]] ConstantBuffer<UniformBuffer> ubo;
 
 struct ParticleSSBO {
     Particle particles;
 };
-StructuredBuffer<ParticleSSBO> particlesIn;
-RWStructuredBuffer<ParticleSSBO> particlesOut;
+[[vk::binding(1)]] StructuredBuffer<ParticleSSBO> particlesIn;
+[[vk::binding(2)]] RWStructuredBuffer<ParticleSSBO> particlesOut;
 
 
 
