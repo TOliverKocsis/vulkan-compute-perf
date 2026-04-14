@@ -51,10 +51,10 @@ struct ParticleSSBO {
 [[vk::binding(1)]] StructuredBuffer<ParticleSSBO> particlesIn;
 [[vk::binding(2)]] RWStructuredBuffer<ParticleSSBO> particlesOut;
 
-
+[[vk::constant_id(0)]] const uint WORKGROUP_SIZE_X = 256;
 
 [shader("compute")]
-[numthreads(256,1,1)]
+[numthreads(WORKGROUP_SIZE_X, 1, 1)]
 void compMain(uint3 threadId : SV_DispatchThreadID)
 {
     uint index = threadId.x;

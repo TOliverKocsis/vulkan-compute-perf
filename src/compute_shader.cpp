@@ -33,6 +33,8 @@ constexpr uint32_t HEIGHT               = 600;
 constexpr uint32_t PARTICLE_COUNT       = 8192;
 constexpr int      MAX_FRAMES_IN_FLIGHT = 2;
 
+uint32_t g_workgroupSize = 256;
+
 const std::vector<char const *> validationLayers = {
     "VK_LAYER_KHRONOS_validation"};
 
@@ -364,7 +366,7 @@ class ComputeShaderApplication
 		                   vk::PhysicalDeviceTimelineSemaphoreFeaturesKHR>
 		    featureChain = {
 		        {.features = {.samplerAnisotropy = true}},                   // vk::PhysicalDeviceFeatures2
-		        {.synchronization2 = true, .dynamicRendering = true},        // vk::PhysicalDeviceVulkan13Features
+		        {.synchronization2 = true, .dynamicRendering = true, .maintenance4 = true},  // vk::PhysicalDeviceVulkan13Features
 		        {.extendedDynamicState = true},                              // vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT
 		        {.timelineSemaphore = true}                                  // vk::PhysicalDeviceTimelineSemaphoreFeaturesKHR
 		    };
@@ -501,9 +503,27 @@ class ComputeShaderApplication
 	void createComputePipeline()
 	{
 		vk::raii::ShaderModule shaderModule = createShaderModule(readFile("shaders/slang.spv"));
+		
+		//specialization info is lot of code but just passes down g_workgroupsize to the slang file,
+		//where vk::constant_id(0) will connect to it
+		vk::SpecializationMapEntry specializationEntry{
+		    .constantID = 0,
+		    .offset     = 0,
+		    .size       = sizeof(uint32_t)};
 
-		vk::PipelineShaderStageCreateInfo computeShaderStageInfo{.stage = vk::ShaderStageFlagBits::eCompute, .module = shaderModule, .pName = "compMain"};
-		vk::PipelineLayoutCreateInfo      pipelineLayoutInfo{.setLayoutCount = 1, .pSetLayouts = &*computeDescriptorSetLayout};
+		vk::SpecializationInfo specializationInfo{
+		    .mapEntryCount = 1,
+		    .pMapEntries   = &specializationEntry,
+		    .dataSize      = sizeof(uint32_t),
+		    .pData         = &g_workgroupSize};
+
+		vk::PipelineShaderStageCreateInfo computeShaderStageInfo{
+		    .stage               = vk::ShaderStageFlagBits::eCompute,
+		    .module              = shaderModule,
+		    .pName               = "compMain",
+		    .pSpecializationInfo = &specializationInfo};
+
+		vk::PipelineLayoutCreateInfo pipelineLayoutInfo{.setLayoutCount = 1, .pSetLayouts = &*computeDescriptorSetLayout};
 		computePipelineLayout = vk::raii::PipelineLayout(device, pipelineLayoutInfo);
 		vk::ComputePipelineCreateInfo pipelineInfo{.stage = computeShaderStageInfo, .layout = *computePipelineLayout};
 		computePipeline = vk::raii::Pipeline(device, nullptr, pipelineInfo);
@@ -786,7 +806,7 @@ class ComputeShaderApplication
 		commandBuffer.begin({});
 		commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, computePipeline);
 		commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute, computePipelineLayout, 0, {computeDescriptorSets[frameIndex]}, {});
-		commandBuffer.dispatch(PARTICLE_COUNT / 256, 1, 1);
+		commandBuffer.dispatch(PARTICLE_COUNT / g_workgroupSize, 1, 1);
 		commandBuffer.end();
 	}
 
@@ -1006,8 +1026,22 @@ class ComputeShaderApplication
 	}
 };
 
-int main()
+int main(int argc, char *argv[])
 {
+	for (int i = 1; i < argc; ++i)
+	{
+		if (std::string(argv[i]) == "--workgroup-size" && i + 1 < argc)
+		{
+			g_workgroupSize = static_cast<uint32_t>(std::stoul(argv[++i]));
+		}
+	}
+
+	if (PARTICLE_COUNT % g_workgroupSize != 0)
+	{
+		std::cerr << "Error: PARTICLE_COUNT (" << PARTICLE_COUNT << ") must be divisible by workgroup size (" << g_workgroupSize << ")" << std::endl;
+		return EXIT_FAILURE;
+	}
+
 	try
 	{
 		ComputeShaderApplication app;
