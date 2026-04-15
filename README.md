@@ -45,12 +45,12 @@ Bindless / descriptor indexing: a modern Vulkan pattern that replaces per-bindin
 ## Building
 
 Requires Vulkan SDK, GLFW, GLM, and CMake.
-workgroup size can be customized, but must divide PARTICLE_COUNT (8192), for now its hardcoded, will be customizable in the next step also
+workgroup size (default: 256) must divide PARTICLE_COUNT (default:8192) without remainder 
 ```bash
 cmake -B build -S .
 cmake --build build
 cd build
-./VulkanComputePerf --workgroup-size 64
+./VulkanComputePerf --particle-count 32768 --workgroup-size 64
 ```
 
 ## Hardware Information

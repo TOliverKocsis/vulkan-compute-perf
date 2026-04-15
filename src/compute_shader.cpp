@@ -30,9 +30,9 @@ import vulkan_hpp;
 
 constexpr uint32_t WIDTH                = 800;
 constexpr uint32_t HEIGHT               = 600;
-constexpr uint32_t PARTICLE_COUNT       = 8192;
-constexpr int      MAX_FRAMES_IN_FLIGHT = 2;
+constexpr int MAX_FRAMES_IN_FLIGHT = 2;
 
+uint32_t g_particleCount = 8192;
 uint32_t g_workgroupSize = 256;
 
 const std::vector<char const *> validationLayers = {
@@ -544,7 +544,7 @@ class ComputeShaderApplication
 		std::uniform_real_distribution rndDist(0.0f, 1.0f);
 
 		// Initial particle positions on a circle
-		std::vector<Particle> particles(PARTICLE_COUNT);
+		std::vector<Particle> particles(g_particleCount);
 		for (auto &particle : particles)
 		{
 			float r           = 0.25f * sqrtf(rndDist(rndEngine));
@@ -556,7 +556,7 @@ class ComputeShaderApplication
 			particle.color    = glm::vec4(rndDist(rndEngine), rndDist(rndEngine), rndDist(rndEngine), 1.0f);
 		}
 
-		vk::DeviceSize bufferSize = sizeof(Particle) * PARTICLE_COUNT;
+		vk::DeviceSize bufferSize = sizeof(Particle) * g_particleCount;
 
 		// Create a staging buffer used to upload data to the gpu
 		vk::raii::Buffer       stagingBuffer({});
@@ -627,8 +627,8 @@ class ComputeShaderApplication
 		{
 			vk::DescriptorBufferInfo bufferInfo(uniformBuffers[i], 0, sizeof(UniformBufferObject));
 
-			vk::DescriptorBufferInfo storageBufferInfoLastFrame(shaderStorageBuffers[(i - 1) % MAX_FRAMES_IN_FLIGHT], 0, sizeof(Particle) * PARTICLE_COUNT);
-			vk::DescriptorBufferInfo storageBufferInfoCurrentFrame(shaderStorageBuffers[i], 0, sizeof(Particle) * PARTICLE_COUNT);
+			vk::DescriptorBufferInfo storageBufferInfoLastFrame(shaderStorageBuffers[(i - 1) % MAX_FRAMES_IN_FLIGHT], 0, sizeof(Particle) * g_particleCount);
+			vk::DescriptorBufferInfo storageBufferInfoCurrentFrame(shaderStorageBuffers[i], 0, sizeof(Particle) * g_particleCount);
 			std::array               descriptorWrites{
                 vk::WriteDescriptorSet{.dstSet = *computeDescriptorSets[i], .dstBinding = 0, .dstArrayElement = 0, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eUniformBuffer, .pImageInfo = nullptr, .pBufferInfo = &bufferInfo, .pTexelBufferView = nullptr},
                 vk::WriteDescriptorSet{.dstSet = *computeDescriptorSets[i], .dstBinding = 1, .dstArrayElement = 0, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eStorageBuffer, .pImageInfo = nullptr, .pBufferInfo = &storageBufferInfoLastFrame, .pTexelBufferView = nullptr},
@@ -752,7 +752,7 @@ class ComputeShaderApplication
 		commandBuffer.setViewport(0, vk::Viewport(0.0f, 0.0f, static_cast<float>(swapChainExtent.width), static_cast<float>(swapChainExtent.height), 0.0f, 1.0f));
 		commandBuffer.setScissor(0, vk::Rect2D(vk::Offset2D(0, 0), swapChainExtent));
 		commandBuffer.bindVertexBuffers(0, {shaderStorageBuffers[frameIndex]}, {0});
-		commandBuffer.draw(PARTICLE_COUNT, 1, 0, 0);
+		commandBuffer.draw(g_particleCount, 1, 0, 0);
 		commandBuffer.endRendering();
 		// After rendering, transition the swapchain image to PRESENT_SRC
 		transition_image_layout(
@@ -806,7 +806,7 @@ class ComputeShaderApplication
 		commandBuffer.begin({});
 		commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, computePipeline);
 		commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute, computePipelineLayout, 0, {computeDescriptorSets[frameIndex]}, {});
-		commandBuffer.dispatch(PARTICLE_COUNT / g_workgroupSize, 1, 1);
+		commandBuffer.dispatch(g_particleCount / g_workgroupSize, 1, 1);
 		commandBuffer.end();
 	}
 
@@ -1034,11 +1034,15 @@ int main(int argc, char *argv[])
 		{
 			g_workgroupSize = static_cast<uint32_t>(std::stoul(argv[++i]));
 		}
+		else if (std::string(argv[i]) == "--particle-count" && i + 1 < argc)
+		{
+			g_particleCount = static_cast<uint32_t>(std::stoul(argv[++i]));
+		}
 	}
 
-	if (PARTICLE_COUNT % g_workgroupSize != 0)
+	if (g_particleCount % g_workgroupSize != 0)
 	{
-		std::cerr << "Error: PARTICLE_COUNT (" << PARTICLE_COUNT << ") must be divisible by workgroup size (" << g_workgroupSize << ")" << std::endl;
+		std::cerr << "Error: particle count (" << g_particleCount << ") must be divisible by workgroup size (" << g_workgroupSize << ")" << std::endl;
 		return EXIT_FAILURE;
 	}
 
