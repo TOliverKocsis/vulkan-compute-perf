@@ -1,5 +1,9 @@
 # Vulkan Performance measurement
 
+<p align="center">
+  <img src="assets/particle_demo.gif" alt="Animated hexagon demo" width="500"/>
+</p>
+
 ## Varying number of threads per workgroups
 The original tutorial uses 
 `commandBuffer.dispatch(PARTICLE_COUNT / 256, 1, 1);`
