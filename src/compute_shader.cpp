@@ -7,6 +7,8 @@
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <limits>
@@ -128,6 +130,11 @@ class ComputeShaderApplication
 
 	double lastTime = 0.0f;
 
+	float                            timestampPeriod    = 0.0f;  //nanoseconds per GPU tick
+	std::vector<vk::raii::QueryPool> timestampQueryPools;
+	std::vector<double>              computeTimingsNs;
+	std::ofstream                    csvFile;
+
 	std::vector<const char *> requiredDeviceExtension = {
 	    vk::KHRSwapchainExtensionName};
 
@@ -171,6 +178,8 @@ class ComputeShaderApplication
 		createCommandBuffers();
 		createComputeCommandBuffers();
 		createSyncObjects();
+		createQueryPools();
+		openResultsCsv();
 	}
 
 	void mainLoop()
@@ -194,10 +203,11 @@ class ComputeShaderApplication
 		swapChain = nullptr;
 	}
 
-	void cleanup() const
+	void cleanup()
 	{
-		glfwDestroyWindow(window);
+		csvFile.close();
 
+		glfwDestroyWindow(window);
 		glfwTerminate();
 	}
 
@@ -342,14 +352,15 @@ class ComputeShaderApplication
 	{
 		std::vector<vk::QueueFamilyProperties> queueFamilyProperties = physicalDevice.getQueueFamilyProperties();
 
-		// get the first index into queueFamilyProperties which supports both graphics and present
+		// get the first index into queueFamilyProperties which support all we need
 		for (uint32_t qfpIndex = 0; qfpIndex < queueFamilyProperties.size(); qfpIndex++)
 		{
 			if ((queueFamilyProperties[qfpIndex].queueFlags & vk::QueueFlagBits::eGraphics) &&
 			    (queueFamilyProperties[qfpIndex].queueFlags & vk::QueueFlagBits::eCompute) &&
+			    (queueFamilyProperties[qfpIndex].timestampValidBits > 0) &&
 			    physicalDevice.getSurfaceSupportKHR(qfpIndex, *surface))
 			{
-				// found a queue family that supports both graphics and present
+				// found a queue family that supports graphics, compute, present, and timestamps
 				queueIndex = qfpIndex;
 				break;
 			}
@@ -804,9 +815,16 @@ class ComputeShaderApplication
 		auto &commandBuffer = computeCommandBuffers[frameIndex];
 		commandBuffer.reset();
 		commandBuffer.begin({});
+
+		commandBuffer.resetQueryPool(*timestampQueryPools[frameIndex], 0, 2);
+
 		commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, computePipeline);
 		commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute, computePipelineLayout, 0, {computeDescriptorSets[frameIndex]}, {});
+
+		commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eTopOfPipe, *timestampQueryPools[frameIndex], 0);
 		commandBuffer.dispatch(g_particleCount / g_workgroupSize, 1, 1);
+		commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eBottomOfPipe, *timestampQueryPools[frameIndex], 1);
+
 		commandBuffer.end();
 	}
 
@@ -823,6 +841,33 @@ class ComputeShaderApplication
 			vk::FenceCreateInfo fenceInfo{};
 			inFlightFences.emplace_back(device, fenceInfo);
 		}
+	}
+
+	void createQueryPools()
+	{
+		//get what a tick means for this device, as measurements will be given in ticks
+		timestampPeriod = physicalDevice.getProperties().limits.timestampPeriod;
+
+		timestampQueryPools.clear();
+		vk::QueryPoolCreateInfo queryPoolInfo{	.queryType  = vk::QueryType::eTimestamp,
+												.queryCount = 2};
+		for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i){
+			timestampQueryPools.emplace_back(device, queryPoolInfo);
+		}
+	}
+
+	void openResultsCsv()
+	{
+		std::filesystem::create_directories("../results");
+
+		std::time_t    t  = std::time(nullptr);
+		std::tm        tm = *std::localtime(&t);
+		char           buf[32];
+		std::strftime(buf, sizeof(buf), "%Y-%m-%d_%H-%M-%S", &tm);
+
+		std::string path = std::string("../results/") + buf + ".csv";
+		csvFile.open(path);
+		csvFile << "particle_count,workgroup_size,frame,dispatch_ns\n";
 	}
 
 	void updateUniformBuffer(uint32_t currentImage)
@@ -909,6 +954,20 @@ class ComputeShaderApplication
 			if (result != vk::Result::eSuccess)
 			{
 				throw std::runtime_error("failed to wait for semaphore!");
+			}
+
+			// Compute is guaranteed done (graphics waited on computeSignalValue).
+			// Read back the two timestamps written around the dispatch.
+			auto [queryResult, gpuTicks] = timestampQueryPools[frameIndex].getResults<uint64_t>(
+			    0, 2,
+			    2 * sizeof(uint64_t),
+			    sizeof(uint64_t),
+			    vk::QueryResultFlagBits::e64 | vk::QueryResultFlagBits::eWait);
+			if (queryResult == vk::Result::eSuccess)
+			{
+				double dispatchNs = static_cast<double>(gpuTicks[1] - gpuTicks[0]) * timestampPeriod;
+				computeTimingsNs.push_back(dispatchNs);
+				csvFile << g_particleCount << "," << g_workgroupSize << "," << computeTimingsNs.size() - 1 << "," << dispatchNs << "\n";
 			}
 
 			vk::PresentInfoKHR presentInfo{
