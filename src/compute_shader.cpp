@@ -36,6 +36,7 @@ constexpr int MAX_FRAMES_IN_FLIGHT = 2;
 
 uint32_t g_particleCount = 8192;
 uint32_t g_workgroupSize = 256;
+double   g_duration      = 2.0;  // seconds; 0 = run until window is closed
 
 const std::vector<char const *> validationLayers = {
     "VK_LAYER_KHRONOS_validation"};
@@ -184,6 +185,7 @@ class ComputeShaderApplication
 
 	void mainLoop()
 	{
+		double startTime = glfwGetTime();
 		while (!glfwWindowShouldClose(window))
 		{
 			glfwPollEvents();
@@ -192,6 +194,8 @@ class ComputeShaderApplication
 			double currentTime = glfwGetTime();
 			lastFrameTime      = (currentTime - lastTime) * 1000.0;
 			lastTime           = currentTime;
+			if (g_duration > 0.0 && (currentTime - startTime) >= g_duration)
+				glfwSetWindowShouldClose(window, GLFW_TRUE);
 		}
 
 		device.waitIdle();
@@ -1096,6 +1100,10 @@ int main(int argc, char *argv[])
 		else if (std::string(argv[i]) == "--particle-count" && i + 1 < argc)
 		{
 			g_particleCount = static_cast<uint32_t>(std::stoul(argv[++i]));
+		}
+		else if (std::string(argv[i]) == "--duration" && i + 1 < argc)
+		{
+			g_duration = std::stod(argv[++i]);
 		}
 	}
 
