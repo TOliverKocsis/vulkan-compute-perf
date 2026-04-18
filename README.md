@@ -28,7 +28,8 @@ The initial particle buffer is allocated in device-local GPU memory. The CPU upl
 
 ## RDNA3 architecture and theoretical expectations
 
-### Hardware under test
+### Hardware
+https://rocm.docs.amd.com/en/docs-6.3.3/reference/gpu-arch-specs.html
 
 | Property | Value |
 |---|---|
@@ -37,11 +38,11 @@ The initial particle buffer is allocated in device-local GPU memory. The CPU upl
 | Compute Units | 84 |
 | Wavefront size | 32 threads |
 | LDS per WGP | 128 KiB |
-| Infinity Cache | 80 MB |
-| L2 Cache | 6 MB |
+| Infinity Cache | 80 MiB |
+| L2 Cache | 6 MiB |
 | Graphics L1 Cache | 256 KiB |
 | L0 Vector Cache | 32 KiB (per CU) |
-| GDDR6 bandwidth | 800 GB/s |
+| GDDR6 bandwidth | up to 800 GB/s |
 | Effective bandwidth (with Infinity Cache) | up to 2900 GB/s |
 | VRAM | 20 GB |
 
@@ -170,22 +171,6 @@ cmake --build build
 cd build
 ./VulkanComputePerf --particle-count 32768 --workgroup-size 64 --duration 10
 ```
-
-## Hardware Information
-
-Hardware information (https://rocm.docs.amd.com/en/docs-6.3.3/reference/gpu-arch-specs.html):
-Radeon RX 7900 XT: 
-Wavefront Size: 32
-VRAM: 20GB
-Compute Units: 84
-LDS (KiB): 128
-Infinity Cache (MiB): 80
-L2 Cache (MiB): 6
-Graphics L1 Cache (KiB): 256
-L0 Vector Cache (KiB): 32
-L0 Scalar Cache (KiB): 16
-L0 Instruction Cache (KiB): 32
-
 
 ## Credits
 
