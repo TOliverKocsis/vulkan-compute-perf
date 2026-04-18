@@ -7,7 +7,6 @@
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
-#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -864,12 +863,8 @@ class ComputeShaderApplication
 	{
 		std::filesystem::create_directories("../results");
 
-		std::time_t    t  = std::time(nullptr);
-		std::tm        tm = *std::localtime(&t);
-		char           buf[32];
-		std::strftime(buf, sizeof(buf), "%Y-%m-%d_%H-%M-%S", &tm);
-
-		std::string path = std::string("../results/") + buf + ".csv";
+		std::string path = std::string("../results/particles_") + std::to_string(g_particleCount) +
+		                   "_wg_" + std::to_string(g_workgroupSize) + ".csv";
 		csvFile.open(path);
 		csvFile << "particle_count,workgroup_size,frame,dispatch_ns\n";
 	}
