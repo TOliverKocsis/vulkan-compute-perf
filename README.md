@@ -4,9 +4,9 @@
   <img src="assets/particle_demo.gif" alt="Particle system demo" width="500"/>
 </p>
 
-> **Central question:** how does workgroup size and particle count affect GPU compute throughput on RDNA3, and where does memory bandwidth become the bottleneck?
+> **Central question:** how does workgroup size and particle count affect GPU compute execution time on RDNA3, and where does memory bandwidth become the bottleneck?
 
-This project uses the Vulkan compute API to run a GPU particle simulation, then sweeps workgroup thread count (32-1k) and particle count (8k – 2M+) while recording precise GPU-side timing via Vulkan timestamp queries. The goal is to connect measured throughput numbers back to the architectural specs of the RX 7900 XT.
+This project uses the Vulkan compute API to run a GPU particle simulation, then sweeps workgroup thread count (32-1k) and particle count (8k – 2M+) while recording precise GPU-side timing via Vulkan timestamp queries. The repo has two goals. First to gain hands on experience with the Vulkan compute pipeline, second is to connect measured execution time numbers back to the architectural specs of the RX 7900 XT.
 
 ---
 
@@ -26,7 +26,8 @@ The initial particle buffer is allocated in device-local GPU memory. The CPU upl
 
 ---
 
-## RDNA3 architecture and theoretical expectations
+<details>
+<summary><strong>RDNA3 architecture and theoretical expectations</strong></summary>
 
 ### Hardware
 https://rocm.docs.amd.com/en/docs-6.3.3/reference/gpu-arch-specs.html
@@ -119,7 +120,10 @@ GPU
             └── SIMD × 4  (each CU has 4 SIMDs)
                 └── 16 wavefront slots  (each SIMD can hold 16 waves)
 
-## Measurement methodology
+</details>
+
+<details>
+<summary><strong>Measurement methodology</strong></summary>
 
 ### Why not CPU timing?
 
@@ -138,6 +142,8 @@ This project uses `VK_QUERY_TYPE_TIMESTAMP` to record GPU-side timing:
 
 `timestampPeriod` is retrieved from `VkPhysicalDeviceProperties` and converts GPU clock ticks to nanoseconds. The result is the actual GPU execution time of the dispatch, isolated from everything else.
 
+</details>
+
 ## Results
 
 ![Latency vs Particle Count](assets/2026-04-18_15-46-52_latency_vs_particles.png)
@@ -146,9 +152,10 @@ This project uses `VK_QUERY_TYPE_TIMESTAMP` to record GPU-side timing:
 
 ![Frame Latency at WG256](assets/2026-04-18_15-46-52_frame_latency_wg256.png)
 
-## Code notes
+<details>
+<summary><strong>Code notes</strong></summary>
 
-# Fragile descriptor binding in order of declaration 
+### Fragile descriptor binding in order of declaration 
 The integer passed to vk::DescriptorSetLayoutBinding(N, ...) on the CPU side must exactly match `[[vk::binding(N)]]` in the shader. There is no compiler enforcement of this correspondence in the used tutorial example. A mismatch produces silent corruption or a validation layer warning rather than a build error.
 
 Slang will assign bindings implicitly by declaration order when `[[vk::binding(N)]]` is omitted, which is fragile — reordering declarations silently shifts all binding numbers.
@@ -159,8 +166,11 @@ Explicit annotations:  Quickest sollution is used here, declare `[[vk::binding(N
 SPIRV-Reflect: introspect the compiled SPIR-V binary at runtime to auto-discover binding layout, driving descriptor set creation from the shader itself rather than hardcoded constants.
 Bindless / descriptor indexing: a modern Vulkan pattern that replaces per-binding wiring with a large descriptor array and runtime indices, sidestepping the problem at a design level.
 
+</details>
 
-## Building
+
+<details>
+<summary><strong>Building</strong></summary>
 
 Requires Vulkan SDK, GLFW, GLM, and CMake.
 workgroup size (default: 256) must divide PARTICLE_COUNT (default:8192) without remainder
@@ -171,6 +181,8 @@ cmake --build build
 cd build
 ./VulkanComputePerf --particle-count 32768 --workgroup-size 64 --duration 10
 ```
+
+</details>
 
 ## Credits
 
