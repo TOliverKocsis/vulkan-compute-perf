@@ -21,6 +21,7 @@ add_custom_command(
         -profile spirv_1_4+spvRayQueryKHR
         -emit-spirv-directly
         -fvk-use-entrypoint-name
+        -O3
         -entry vertMain -entry fragMain -entry compMain
         -o ${SHADERS_DIR}/slang.spv
     DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/shaders/shader_compute.slang

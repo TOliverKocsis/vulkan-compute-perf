@@ -58,39 +58,39 @@ Each particle holds:
 | color | float4 | 16 bytes |
 | **Total** | | **32 bytes** |
 
-The shader reads from `particlesIn` and writes to `particlesOut`, so total memory traffic per particle per frame is **64 bytes** (32 read + 32 write).
+The compute shader function uses particle.position and particle.velocity 8+8=16 bytes. It then rewrites this with updated values, therefore the read + write memory operation should take 32 bytes for every particle.
+
+To calculate the theoritical maximum speeds, I calculate amount of bytes in power of 2. The counts are already in power of 2, just need to multiple with 2^5 for the 32 byte traffic:  
 
 | Particle count | Total traffic per frame |
 |---|---|
-| 65,536 | 4 MB |
-| 262,144 | 16 MB |
-| 524,288 | 32 MB |
-| 1,048,576 | 64 MB |
-| 2,097,152 | 128 MB |
+| 65,536 | 2^16 * 2^5 = 2^21|
+| 262,144 | 2^18 * 2^5 = 2^23|
+| 524,288 | 2^19 * 2^5 = 2^24|
+| 1,048,576 | 2^20 * 2^5 = 2^25|
+| 2,097,152 | 12^21 * 2^5 = 2^26|
+| 4,194,304 | 12^22 * 2^5 = 2^27|
 
-### Infinity Cache and the expected bandwidth cliff
+### Infinity Cache and the expected bandwidth
 
-The Infinity Cache is 80 MB. It acts primarily as a read cache. This leads to a concrete prediction:
-
-- At **≤ ~1.25M particles** (~40 MB of read data), the `particlesIn` buffer fits inside the Infinity Cache. Reads come from cache at effective bandwidth far above the 800 GB/s GDDR6 figure.
-- Above **~2.5M particles** (~80 MB read data), the read working set spills out of cache and throughput should drop toward the GDDR6 ceiling of 800 GB/s.
-
-**Prediction:** effective read bandwidth will look much higher than 800 GB/s at small particle counts, and will decline as particle count grows past the cache capacity. A visible throughput cliff is expected somewhere around 1–2.5M particles depending on cache eviction behaviour.
+The Infinity Cache is 80 MiB. It is unclear based on my quick research if this is just read or read and write.
+Log2(80MiB) = Log2(83 886 080) = 26.32 so the cache can fit more than 2^26 bytes and less than 2^27 bytes.
+This means the around 2 Million particles should fit in the Infinity Cache, and we should not see significant drop in speed.
+However it is still unclear if this is a read only cache or read and write cache, for example 40MiB for read and 40MiB for write.
+Therefore I cannot assume that the read+write whole traffic would fit in this cache, and memory load speed could be mostly hidden with interleaving threads, or with more precise GPU terms "high occupancy".
 
 ### Theoretical throughput ceiling
 
-At (up to) 800 GB/s GDDR6 bandwidth and 64 bytes per particle:
+Cache and GDDR6 speeds are given in GB for marketing instead of power of 2 speeds, for easier calculation, first change them to GiB/s:
+2900 * (10^9 / 2^30) = 2700
+The 2900 GB/s is 2700 GiB/s.
+The 800 GB/s is 745 GiB/s.
 
-```
-Max throughput = 800 GB/s ÷ 64 bytes = 12,500M particles/s = 12.5B particles/s
-```
+Lets calculate the ~500k particles expected maximum speed at 2700 GiB/s:
+2^24 / 2700 * 2^30 = 1/(2700) * 1/(2^(30-24)) = 1/(2700) * 1/(2^6) = 5,78 µs
 
-At that rate, dispatching 1M particles should take:
-
-```
-1,000,000 particles ÷ 12,500,000,000 particles/s ≈ 0.08 ms = 80 µs
-```
-Therefore an expected worse case for 2m particles is 160us.
+Similarly let's see ~4M particles at GDDR6 speed without cache at all so at 745 GiB/s:
+1/(745) * 1/(2^3) = 1 / 5960 = 167 µs
 
 ### Workgroup size 
 The original tutorial uses 
@@ -113,12 +113,17 @@ On the shader part we can vary the number of threads per workgroups.
 On the GPU one workgroup will run on one WGP, where threads will be organized into wavefronts.
 
 The below graph is my current understanding of execution hierarchy:
+```
 GPU
 └── Shader Engine (SE)
     └── Work Group Processor (WGP)
         └── CU × 2  (a WGP contains 2 CUs)
             └── SIMD × 4  (each CU has 4 SIMDs)
                 └── 16 wavefront slots  (each SIMD can hold 16 waves)
+```
+For expectation I would guess that smaller num_threads (/smaller workgroups) allow the GPU to schedule wavefronts as it pleases, as there is less restriction which wavefronts must run on the same WGP/SIMD so that probably should be a bit faster.
+However at larger particle counts, with smaller num_threads, the larger number of workgroups might increase book keeping cost, and could cause slower speeds.
+To make much more educated guesses I am aware that there is a special tool for AMD: Radeon GPU Analyser (RGA), but at this point of time I have limited the scope of this project.
 
 </details>
 
@@ -151,6 +156,54 @@ This project uses `VK_QUERY_TYPE_TIMESTAMP` to record GPU-side timing:
 ![Latency vs Workgroup Size](assets/2026-04-18_15-46-52_latency_vs_workgroup.png)
 
 ![Frame Latency at WG256](assets/2026-04-18_15-46-52_frame_latency_wg256.png)
+
+### Compiler findings
+After some of the result being rather far away from theoritical max speeds for example at ~500k particles: ~17us instead of 5,78us, I did some investigations.
+First I have made the mistake of forgetting to add -O3 to the slang compilation command, however suprisingly this did not change the results at all.
+Second I have confirmed the sizes of the Particles struct with:
+```
+	std::cout<< "size of glm::vec2: " << sizeof(glm::vec2) << std::endl;
+	std::cout<< "size of glm::vec4: " << sizeof(glm::vec4) << std::endl;
+	std::cout<< "size of particles: " << sizeof(Particle) << std::endl;
+```
+And made confirmed the calculations again by hand.
+
+Thirdly I wanted to confirm my assumption that the compute shader only loads the position and velocity part of the Particles struct:
+
+```
+    particlesOut[index].particles.position = particlesIn[index].particles.position + particlesIn[index].particles.velocity.xy * ubo.deltaTime;
+    particlesOut[index].particles.velocity = particlesIn[index].particles.velocity;
+```
+If compiled with -O3 I would assume that the .color part that is 16 bytes is NOT loaded in the compute shader.
+
+With the disassembly of the compiled .spv: spirv-dis /home/oliverk/Documents/vulkan-compute-perf/build/shaders/slang.spv 2>/dev/null | awk '/^.*%compMain = OpFunction/,/^.*OpFunctionEnd/' | head -120
+I have found:
+```
+%78 = OpLoad %ParticleSSBO_std430 %77
+```
+This gives me the impression that the whole struct might be loaded.
+Then at write back time it seems only the position and velocity is written back at %88:
+```
+%74 = OpAccessChain %_ptr_StorageBuffer_ParticleSSBO_std430 %particlesOut %int_0 %index
+         %75 = OpAccessChain %_ptr_StorageBuffer_Particle_std430 %74 %int_0
+         %76 = OpAccessChain %_ptr_StorageBuffer_v2float %75 %int_0
+         %77 = OpAccessChain %_ptr_StorageBuffer_ParticleSSBO_std430 %particlesIn %int_0 %index
+         %78 = OpLoad %ParticleSSBO_std430 %77
+         %79 = OpCopyLogical %ParticleSSBO_std430_logical %78
+         %80 = OpCompositeExtract %Particle_std430_logical %79 0
+         %81 = OpCompositeExtract %v2float %80 0
+         %82 = OpCompositeExtract %v2float %80 1
+         %83 = OpVectorShuffle %v2float %82 %82 0 1
+         %84 = OpAccessChain %_ptr_Uniform_float %ubo %int_0
+         %85 = OpLoad %float %84
+         %86 = OpVectorTimesScalar %v2float %83 %85
+         %87 = OpFAdd %v2float %81 %86
+               OpStore %76 %87
+         %88 = OpAccessChain %_ptr_StorageBuffer_v2float %75 %int_1
+               OpStore %88 %82
+```
+
+TODO: confirm by removing color? changing struct? Calculate again with 32+16=48 bytes of traffic
 
 <details>
 <summary><strong>Code notes</strong></summary>
