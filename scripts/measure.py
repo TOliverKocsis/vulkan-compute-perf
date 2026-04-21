@@ -8,13 +8,13 @@ EXECUTABLE = REPO_ROOT / "build" / "VulkanComputePerf"
 DURATION = 3  # seconds per run
 
 # Threads: 32 .. 1024
-thread_counts = [32 * (2 ** i) for i in range(6)]  # 32 .. 2048
+thread_counts = [32 * (2 ** i) for i in range(6)]
 
-# Particles: 8192 to at least 2_500_000
-# 8192 .. 2_097_152
+# Particles count
+# 8192 .. 4,194,304
 particle_counts = []
 p = 8192
-while p < 2_500_000:
+while p < 5_000_000:
     particle_counts.append(p)
     p *= 2
 

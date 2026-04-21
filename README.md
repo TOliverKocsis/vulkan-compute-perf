@@ -60,21 +60,24 @@ Each particle holds:
 
 The compute shader function uses particle.position and particle.velocity 8+8=16 bytes. It then rewrites this with updated values, therefore the read + write memory operation should take 32 bytes for every particle.
 
-To calculate the theoritical maximum speeds, I calculate amount of bytes in power of 2. The counts are already in power of 2, just need to multiple with 2^5 for the 32 byte traffic:  
+To calculate the theoritical maximum speeds, I calculate amount of bytes also in power of 2. The counts are already in power of 2, just need to multiple with 2^5 for the 32 byte traffic:  
 
-| Particle count | Total traffic per frame |
+| Particle count | Total traffic per frame [bytes] |
 |---|---|
-| 65,536 | 2^16 * 2^5 = 2^21|
-| 262,144 | 2^18 * 2^5 = 2^23|
-| 524,288 | 2^19 * 2^5 = 2^24|
-| 1,048,576 | 2^20 * 2^5 = 2^25|
-| 2,097,152 | 12^21 * 2^5 = 2^26|
-| 4,194,304 | 12^22 * 2^5 = 2^27|
+| 65,536 | 2^16 * 2^5 = 2^21 = 2,097,152 |
+| 131,072 | 2^17 * 2^5 = 2^22 = 4,194,304 |
+| 262,144 | 2^18 * 2^5 = 2^23 = 8,388,608 |
+| 524,288 | 2^19 * 2^5 = 2^24 = 16,777,216 |
+| 1,048,576 | 2^20 * 2^5 = 2^25 = 33,554,432 |
+| 2,097,152 | 12^21 * 2^5 = 2^26 = 67,108,864 |
+| 4,194,304 | 12^22 * 2^5 = 2^27 = 134,217,728 |
 
-### Infinity Cache and the expected bandwidth
+### L2 / Infinity Cache and the expected bandwidth
 
-The Infinity Cache is 80 MiB. It is unclear based on my quick research if this is just read or read and write.
-Log2(80MiB) = Log2(83 886 080) = 26.32 so the cache can fit more than 2^26 bytes and less than 2^27 bytes.
+The L2 cache is 6 MiB = 6,291,456 bytes. Therefore ~260k particles should show some speed degradation as L2 cache cant hold the entire memory traffic.
+
+The Infinity Cache is 80 MiB = 83,886,080 bytes. It is unclear based on my quick research if this is just read or read and write.
+Log2(80MiB) = Log2(83,886,080) = 26.32 so the cache can fit more than 2^26 bytes and less than 2^27 bytes.
 This means the around 2 Million particles should fit in the Infinity Cache, and we should not see significant drop in speed.
 However it is still unclear if this is a read only cache or read and write cache, for example 40MiB for read and 40MiB for write.
 Therefore I cannot assume that the read+write whole traffic would fit in this cache, and memory load speed could be mostly hidden with interleaving threads, or with more precise GPU terms "high occupancy".
@@ -82,14 +85,20 @@ Therefore I cannot assume that the read+write whole traffic would fit in this ca
 ### Theoretical throughput ceiling
 
 Cache and GDDR6 speeds are given in GB for marketing instead of power of 2 speeds, for easier calculation, first change them to GiB/s:
+
 2900 * (10^9 / 2^30) = 2700
-The 2900 GB/s is 2700 GiB/s.
-The 800 GB/s is 745 GiB/s.
+
+2900 GB/s is 2700 GiB/s
+
+800 GB/s is 745 GiB/s
+
 
 Lets calculate the ~500k particles expected maximum speed at 2700 GiB/s:
+
 2^24 / 2700 * 2^30 = 1/(2700) * 1/(2^(30-24)) = 1/(2700) * 1/(2^6) = 5,78 µs
 
 Similarly let's see ~4M particles at GDDR6 speed without cache at all so at 745 GiB/s:
+
 1/(745) * 1/(2^3) = 1 / 5960 = 167 µs
 
 ### Workgroup size 
@@ -151,13 +160,23 @@ This project uses `VK_QUERY_TYPE_TIMESTAMP` to record GPU-side timing:
 
 ## Results
 
-![Latency vs Particle Count](assets/2026-04-18_15-46-52_latency_vs_particles.png)
+The first plot shows how one pass of all particles calculation, so one compute shader pass takes more and more time as we add more particles. Note that if time/oparticle would be stable, we should see a linear line as double amount of particles at every data point should take double the time. This nicely shows the non linearity of execution times.
+![Latency vs Particle Count](assets/2026-04-21_20-31-07_latency_vs_particles.png)
 
-![Latency vs Workgroup Size](assets/2026-04-18_15-46-52_latency_vs_workgroup.png)
+The second plot shows the effects of different num_threads settings for the same particle count. As visible my intuitions were just simply wrong. In this example the workgroup sizes does not seem to make much difference. The only interesting fact is how large of a variance (minimum vs maximum times) is there  at 2M particles that is visualized by the bars on the measurement point.
+![Latency vs Workgroup Size](assets/2026-04-21_20-31-07_latency_vs_workgroup.png)
 
-![Frame Latency at WG256](assets/2026-04-18_15-46-52_frame_latency_wg256.png)
+This third plots shows the effect of spilling over certain cache levels, and how that changes the stability of how much time one pass of the compute pipeline takes.
+Seemingly there isnt much difference between the whole data fitting in L2 or not. The GPU seemingly does a great job hiding latency with high occupancy.
+The bottom two subplots show an interesting behaviour of the Infinity Cache, how the performance start to degrade and get more noise, possibly from thermal thottrling.
+The last plot with 4M is interesting that time is obviously much larger, but interestingly the tiems are much more stable compared to the 2M cache. This shows that GDDR6 memory on this GPU gives a stable performance compared tyo the Infinity Cache.
+![Frame Latency at WG256](assets/2026-04-21_20-31-07_frame_latency_wg256.png)
 
-### Compiler findings
+The last graph shows the calculated time of how much time one particle takes on avarage. As showsn, on smaller particle counts the overhead of the calculation takes larger portiopn of the whole computation, therefore the per particles times are larger at 8k and 16k. We reach a rather stable point from 65k to 2M, where per particle calculation is less than 0.5 ns. The 4M measurement nicely shows the effect of infinity cache overflow, performance sharply falls off.
+![ns per Particle](assets/2026-04-21_20-31-07_ns_per_particle.png)
+
+
+### Compiler investigation 
 After some of the result being rather far away from theoritical max speeds for example at ~500k particles: ~17us instead of 5,78us, I did some investigations.
 
 First I have made the mistake of forgetting to add -O3 to the slang compilation command, however this did not change the results at all. Later I concluded that this is because the ACO compiler does the optimization, regardless of what SPIR-V does.
@@ -215,8 +234,10 @@ The isa_dump.txt has been added to assets.
 The conclusion:
 ```
 buffer_load_b128 v[4:7], v0, s[12:15], 0 offen              ; e05c0000 80430400
+...
+buffer_store_b128 v[4:7], v0, s[4:7], 0 offen               ; e0740000 80410400
 ```
-128 bits is loaded = 16 bytes, which proves that only partial load happened from Particles struct, not the entire struct, so .color is not loaded unneceserly. 
+128 bits is loaded and written = 16+16 bytes, which proves that only partial load happened from Particles struct, not the entire struct, so .color is not loaded unneceserly. 
 Furthermore it can be observed that the delta time from the ubo is loaded only once then is cached in the scalar cache:
 ```
 s_buffer_load_b32 s1, s[8:11], null

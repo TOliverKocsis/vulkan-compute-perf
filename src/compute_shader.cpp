@@ -1086,6 +1086,10 @@ class ComputeShaderApplication
 
 int main(int argc, char *argv[])
 {
+	//std::cout<< "size of glm::vec2: " << sizeof(glm::vec2) << std::endl;git push
+	//std::cout<< "size of glm::vec4: " << sizeof(glm::vec4) << std::endl;
+	//std::cout<< "size of particles: " << sizeof(Particle) << std::endl;
+
 	for (int i = 1; i < argc; ++i)
 	{
 		if (std::string(argv[i]) == "--workgroup-size" && i + 1 < argc)
