@@ -164,6 +164,7 @@ The first plot shows how one pass of all particles calculation, so one compute s
 ![Latency vs Particle Count](assets/2026-04-21_20-31-07_latency_vs_particles.png)
 
 The second plot shows the effects of different num_threads settings for the same particle count. As visible my intuitions were just simply wrong. In this example the workgroup sizes does not seem to make much difference. The only interesting fact is how large of a variance (minimum vs maximum times) is there  at 2M particles that is visualized by the bars on the measurement point.
+Possbily this would have been a more interesting measurement if intra thread communication is part of the shader calculation for some reason. That would have shown effects of using the 'groupshared' memory area. 
 ![Latency vs Workgroup Size](assets/2026-04-21_20-31-07_latency_vs_workgroup.png)
 
 This third plots shows the effect of spilling over certain cache levels, and how that changes the stability of how much time one pass of the compute pipeline takes.
