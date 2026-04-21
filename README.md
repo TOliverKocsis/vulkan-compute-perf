@@ -159,14 +159,16 @@ This project uses `VK_QUERY_TYPE_TIMESTAMP` to record GPU-side timing:
 
 ### Compiler findings
 After some of the result being rather far away from theoritical max speeds for example at ~500k particles: ~17us instead of 5,78us, I did some investigations.
-First I have made the mistake of forgetting to add -O3 to the slang compilation command, however suprisingly this did not change the results at all.
+
+First I have made the mistake of forgetting to add -O3 to the slang compilation command, however this did not change the results at all. Later I concluded that this is because the ACO compiler does the optimization, regardless of what SPIR-V does.
+
 Second I have confirmed the sizes of the Particles struct with:
 ```
 	std::cout<< "size of glm::vec2: " << sizeof(glm::vec2) << std::endl;
 	std::cout<< "size of glm::vec4: " << sizeof(glm::vec4) << std::endl;
 	std::cout<< "size of particles: " << sizeof(Particle) << std::endl;
 ```
-And made confirmed the calculations again by hand.
+And confirmed the calculations of theoritical speeds again by hand.
 
 Thirdly I wanted to confirm my assumption that the compute shader only loads the position and velocity part of the Particles struct:
 
@@ -202,8 +204,27 @@ Then at write back time it seems only the position and velocity is written back 
          %88 = OpAccessChain %_ptr_StorageBuffer_v2float %75 %int_1
                OpStore %88 %82
 ```
+This would have ment that my original assumption of 16 bytes read + 16 bytes write per thread is incorrect, and 32 bytes of read + 16 bytes of write is happening per thread.
 
-TODO: confirm by removing color? changing struct? Calculate again with 32+16=48 bytes of traffic
+On further investigation I searched the entire Spir-V-> Mesa -> RADV -> ACO compiler dump.
+To get the file:
+```
+RADV_DEBUG=shaders ./VulkanComputePerf 2>isa_dump.txt
+```
+The isa_dump.txt has been added to assets.
+The conclusion:
+```
+buffer_load_b128 v[4:7], v0, s[12:15], 0 offen              ; e05c0000 80430400
+```
+128 bits is loaded = 16 bytes, which proves that only partial load happened from Particles struct, not the entire struct, so .color is not loaded unneceserly. 
+Furthermore it can be observed that the delta time from the ubo is loaded only once then is cached in the scalar cache:
+```
+s_buffer_load_b32 s1, s[8:11], null
+```
+s_buffer load instead of buffer load -> scalar cache, not vector cache.
+
+The write back is also confirmed to be 128 bits = 16 bytes of write.
+Therefore it is 100% that the per thread memory traffic is indeed 16bytes read + 16 bytes write = 32 bytes.
 
 <details>
 <summary><strong>Code notes</strong></summary>
