@@ -190,97 +190,109 @@ This project uses `VK_QUERY_TYPE_TIMESTAMP` to record GPU-side timing:
 
 `timestampPeriod` is retrieved from `VkPhysicalDeviceProperties` and converts GPU clock ticks to nanoseconds. The result is the actual GPU execution time of the dispatch, isolated from everything else.
 
+### Automation
+
+A `--duration <seconds>` CLI argument closes the window after a fixed run time, 
+enabling a shell script to sweep all particle count and workgroup size combinations 
+unattended. Results are written to CSV and plotted with a Python script in `scripts/`.
+
 </details>
 
 ## Results
 
-The first plot shows how one pass of all particles calculation, so one compute shader pass takes more and more time as we add more particles. Note that if time/oparticle would be stable, we should see a linear line as double amount of particles at every data point should take double the time. This nicely shows the non linearity of execution times.
+Dispatch time grows non-linearly with particle count. All six workgroup sizes overlap 
+almost exactly, confirming the bottleneck is memory bandwidth rather than anything 
+workgroup-specific. The curve stays flat through the Infinity Cache range, then rises 
+steeply at 2M and sharply again at 4M as data spills to GDDR6.
 ![Latency vs Particle Count](assets/2026-04-21_20-31-07_latency_vs_particles.png)
 
-The second plot shows the effects of different num_threads settings for the same particle count. As visible my intuitions were just simply wrong. In this example the workgroup sizes does not seem to make much difference. The only interesting fact is how large of a variance (minimum vs maximum times) is there  at 2M particles that is visualized by the bars on the measurement point.
-Possbily this would have been a more interesting measurement if intra thread communication is part of the shader calculation for some reason. That would have shown effects of using the 'groupshared' memory area.git po 
+Across all particle counts, changing workgroup size from 32 to 1024 produces no 
+meaningful difference in dispatch time. This confirms the bandwidth-bound hypothesis 
+from the hardware section. When the bottleneck is memory throughput, thread grouping 
+does not matter. The 2M line shows notably large variance (visible error bars), which 
+is examined in the next graph.
 ![Latency vs Workgroup Size](assets/2026-04-21_20-31-07_latency_vs_workgroup.png)
 
-This third plots shows the effect of spilling over certain cache levels, and how that changes the stability of how much time one pass of the compute pipeline takes.
-Seemingly there isnt much difference between the whole data fitting in L2 or not. The GPU seemingly does a great job hiding latency with high occupancy.
-The bottom two subplots show an interesting behaviour of the Infinity Cache, how the performance start to degrade and get more noise, possibly from thermal thottrling.
-The last plot with 4M is interesting that time is obviously much larger, but interestingly the tiems are much more stable compared to the 2M cache. This shows that GDDR6 memory on this GPU gives a stable performance compared tyo the Infinity Cache.
+Frame-by-frame dispatch time at four particle counts that each represent a different 
+cache regime. At 131k the GPU visibly warms up: dispatch time starts at ~6.5µs and 
+settles to ~4µs over the first ~500 frames as GPU clocks ramp up. 
+
+At 262k (spilling out of L2) times stabilise around 8µs with occasional spikes, but the L2 spill itself 
+causes no dramatic step change. The GPU hides the latency with high occupancy. 
+
+At 2M (nominally inside Infinity Cache) times are noisy and drifting, ranging 80–110µs, 
+the Infinity Cache is operating near its capacity boundary, producing irregular access 
+patterns. 
+
+At 4M (spilled to GDDR6) times are strikingly stable at ~565µs GDDR6 
+saturates predictably, giving consistent throughput with minimal variance.
 ![Frame Latency at WG256](assets/2026-04-21_20-31-07_frame_latency_wg256.png)
 
-The last graph shows the calculated time of how much time one particle takes on avarage. As showsn, on smaller particle counts the overhead of the calculation takes larger portiopn of the whole computation, therefore the per particles times are larger at 8k and 16k. We reach a rather stable point from 65k to 2M, where per particle calculation is less than 0.5 ns. The 4M measurement nicely shows the effect of infinity cache overflow, performance sharply falls off.
+
+Normalising by particle count reveals dispatch overhead at small sizes. At 8k and 
+16k the fixed cost of launching a dispatch dominates, giving high ns/particle values. 
+From ~65k onwards the curve flattens to around 0.03 ns/particle, where the GPU is 
+fully utilised and the per-particle cost is stable. At 4M the Infinity Cache overflow 
+is clearly visible as a sharp uptick. The same work costs ~4–5× more per particle 
+due to GDDR6 latency.
 ![ns per Particle](assets/2026-04-21_20-31-07_ns_per_particle.png)
 
 
 ### Compiler investigation 
-After some of the result being rather far away from theoritical max speeds for example at ~500k particles: ~17us instead of 5,78us, I did some investigations.
 
-First I have made the mistake of forgetting to add -O3 to the slang compilation command, however this did not change the results at all. Later I concluded that this is because the ACO compiler does the optimization, regardless of what SPIR-V does.
+The theoretical ceiling for ~500k particles is 5.78µs, the measured result is ~17µs —
+roughly a 3× gap. Theoretical ceilings assume perfect bandwidth saturation with zero
+scheduling overhead and no cache warmup. The gap is expected. The more interesting
+question is whether the 32 bytes per particle bandwidth model is actually correct, or
+whether the shader was silently doing more memory work than assumed.
 
-Second I have confirmed the sizes of the Particles struct with:
+The shader only reads and writes position and velocity, it never touches the color
+field. But the Particles struct contains color (16 bytes), raising the question of
+whether the compiler loads the full struct anyway. 
+
+Inspecting the SPIR-V intermediate representation:
 ```
-	std::cout<< "size of glm::vec2: " << sizeof(glm::vec2) << std::endl;
-	std::cout<< "size of glm::vec4: " << sizeof(glm::vec4) << std::endl;
-	std::cout<< "size of particles: " << sizeof(Particle) << std::endl;
+spirv-dis /vulkan-compute-perf/build/shaders/slang.spv 2>/dev/null | awk '/^.*%compMain = OpFunction/,/^.*OpFunctionEnd/' | head -120
 ```
-And confirmed the calculations of theoritical speeds again by hand.
 
-Thirdly I wanted to confirm my assumption that the compute shader only loads the position and velocity part of the Particles struct:
 
-```
-    particlesOut[index].particles.position = particlesIn[index].particles.position + particlesIn[index].particles.velocity.xy * ubo.deltaTime;
-    particlesOut[index].particles.velocity = particlesIn[index].particles.velocity;
-```
-If compiled with -O3 I would assume that the .color part that is 16 bytes is NOT loaded in the compute shader.
-
-With the disassembly of the compiled .spv: spirv-dis /home/oliverk/Documents/vulkan-compute-perf/build/shaders/slang.spv 2>/dev/null | awk '/^.*%compMain = OpFunction/,/^.*OpFunctionEnd/' | head -120
-I have found:
+Showed an `OpLoad` of the entire struct:
 ```
 %78 = OpLoad %ParticleSSBO_std430 %77
 ```
-This gives me the impression that the whole struct might be loaded.
-Then at write back time it seems only the position and velocity is written back at %88:
-```
-%74 = OpAccessChain %_ptr_StorageBuffer_ParticleSSBO_std430 %particlesOut %int_0 %index
-         %75 = OpAccessChain %_ptr_StorageBuffer_Particle_std430 %74 %int_0
-         %76 = OpAccessChain %_ptr_StorageBuffer_v2float %75 %int_0
-         %77 = OpAccessChain %_ptr_StorageBuffer_ParticleSSBO_std430 %particlesIn %int_0 %index
-         %78 = OpLoad %ParticleSSBO_std430 %77
-         %79 = OpCopyLogical %ParticleSSBO_std430_logical %78
-         %80 = OpCompositeExtract %Particle_std430_logical %79 0
-         %81 = OpCompositeExtract %v2float %80 0
-         %82 = OpCompositeExtract %v2float %80 1
-         %83 = OpVectorShuffle %v2float %82 %82 0 1
-         %84 = OpAccessChain %_ptr_Uniform_float %ubo %int_0
-         %85 = OpLoad %float %84
-         %86 = OpVectorTimesScalar %v2float %83 %85
-         %87 = OpFAdd %v2float %81 %86
-               OpStore %76 %87
-         %88 = OpAccessChain %_ptr_StorageBuffer_v2float %75 %int_1
-               OpStore %88 %82
-```
-This would have ment that my original assumption of 16 bytes read + 16 bytes write per thread is incorrect, and 32 bytes of read + 16 bytes of write is happening per thread.
+which suggested a possible 32B read + 16B write rather than the assumed 16B + 16B.
 
-On further investigation I searched the entire Spir-V-> Mesa -> RADV -> ACO compiler dump.
-To get the file:
+To get a definitive answer, the full compiled GPU machine instructions were extracted
+from Mesa's RADV driver:
+
 ```
 RADV_DEBUG=shaders ./VulkanComputePerf 2>isa_dump.txt
 ```
-The isa_dump.txt has been added to assets.
-The conclusion:
+
+The relevant instructions:
 ```
-buffer_load_b128 v[4:7], v0, s[12:15], 0 offen              ; e05c0000 80430400
-...
-buffer_store_b128 v[4:7], v0, s[4:7], 0 offen               ; e0740000 80410400
+buffer_load_b128 v[4:7], v0, s[12:15], 0 offen
+buffer_store_b128 v[4:7], v0, s[4:7], 0 offen
 ```
-128 bits is loaded and written = 16+16 bytes, which proves that only partial load happened from Particles struct, not the entire struct, so .color is not loaded unneceserly. 
-Furthermore it can be observed that the delta time from the ubo is loaded only once then is cached in the scalar cache:
+
+128-bit load and 128-bit store. Exactly 16 bytes read and 16 bytes written. The
+driver's compiler backend eliminated the color field entirely despite the SPIR-V
+intermediate representation suggesting a full struct load. The bandwidth model is
+correct.
+
+Additionally, the delta time uniform is routed to the scalar cache rather than the
+vector cache:
 ```
 s_buffer_load_b32 s1, s[8:11], null
 ```
-s_buffer load instead of buffer load -> scalar cache, not vector cache.
 
-The write back is also confirmed to be 128 bits = 16 bytes of write.
-Therefore it is 100% that the per thread memory traffic is indeed 16bytes read + 16 bytes write = 32 bytes.
+This is correct behaviour: a value uniform across all threads belongs in the scalar
+cache, freeing vector cache bandwidth for the per-particle data.
+
+The ~3× gap from the theoretical ceiling is therefore not a measurement error or a
+compiler inefficiency. It reflects realistic bandwidth utilisation: launch overhead,
+cache warmup (visible in the 131k frame-by-frame graph), and the fact that peak
+advertised bandwidth is rarely achievable in practice.
 
 <details>
 <summary><strong>Code notes</strong></summary>
