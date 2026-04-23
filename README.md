@@ -4,7 +4,7 @@
   <img src="assets/particle_demo.gif" alt="Particle system demo" width="500"/>
 </p>
 
-![demo](assets/demo.mp4)
+<video src="https://raw.githubusercontent.com/TOliverKocsis/vulkan-compute-perf/main/assets/demo.mp4" controls width="800"></video>
 
 A Vulkan compute dispatch that updates millions of GPU-resident particles per frame, instrumented with GPU-side timestamp queries to measure actual shader execution time. The shader is intentionally minimal: one thread per particle and no inter-thread communication. A controlled memory bandwidth probe.
 
