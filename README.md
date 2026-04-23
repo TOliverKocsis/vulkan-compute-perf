@@ -4,6 +4,8 @@
   <img src="assets/particle_demo.gif" alt="Particle system demo" width="500"/>
 </p>
 
+![demo](assets/demo.mp4)
+
 A Vulkan compute dispatch that updates millions of GPU-resident particles per frame, instrumented with GPU-side timestamp queries to measure actual shader execution time. The shader is intentionally minimal: one thread per particle and no inter-thread communication. A controlled memory bandwidth probe.
 
 The automated sweep covers workgroup sizes from 32 to 1024 threads and particle counts from 8k to 4M+. At ~500k particles the measured dispatch time is ~17µs against a theoretical Infinity Cache ceiling of ~5.8µs. At 4M particles the cache overflows into GDDR6 and the cliff is visible in the data. 
